@@ -1,0 +1,509 @@
+---
+title: "Data Science Consulting:  Midterm Team Project -- Part 1"
+author: "Asta, Joy, Shiyue, Shayne"
+date: ""
+output: html_document
+---
+
+```{r setup, include=FALSE}
+set.seed(1031)
+knitr::opts_chunk$set(echo = TRUE, comment="", warning = FALSE, message = FALSE, tidy.opts=list(width.cutoff=55))
+```
+
+```{r clear memory}
+#Clear memory
+rm(list = ls())
+```
+
+```{r libraries, echo = FALSE}
+library(data.table)
+library(DT)
+library(nnet)
+library(class)
+library(caret)
+library(gbm)
+library(rpart)
+library(randomForest)
+library(glmnet)
+library(e1071)
+library(vtreat)
+library(xgboost)
+library(h2o)
+```
+
+```{r source_files}
+
+```
+
+```{r functions}
+get.dat.name <- function(size, idx) {
+  return (paste0("dat_", size, "_", idx))
+}
+
+probability.to.response <- function(probs){
+  probs.mean = apply(probs, c(1,2),mean)
+  col.idx <- apply(probs.mean,1,which.max)
+  return(colnames(probs.mean)[col.idx])
+}
+
+round.numerics <- function(x, digits){
+  if(is.numeric(x)){
+    x <- round(x = x, digits = digits)
+  }
+  return(x)
+}
+```
+
+```{r constants}
+n.values <- c(900, 2100, 2400)
+iterations <- 3
+model.formula <- label~.
+```
+
+```{r load_data}
+train <- fread(input = "MNIST-fashion training set-49.csv")
+test <- fread(input = "MNIST-fashion testing set-49.csv")
+```
+
+```{r clean_data}
+models = list()
+train[,label:=as.factor(label)]
+test[,label:=as.factor(label)]
+n.train = nrow(train)
+```
+
+```{r generate_samples}
+train.samples=list()
+for(i in 1:iterations){
+  for (n in n.values){
+    train.samples[[get.dat.name(n,i)]] <- train[sample(1:.N,n,replace = F)]
+  }
+} #generating samples
+
+```
+
+## Introduction {.tabset}
+
+Dear Engineering Teams,
+
+In this report, we present an image recognition project focusing on predictive classifications using machine learning models. Our objective is to identify the most effective models for classifying apparel images from the MNIST Fashion database.The dataset used for this project consisted of apparel images divided into 49 pixels per image. We will explore different sample sizes to understand the impact on predictive accuracy and computational efficiency. To evaluate the models, we introduce a scoring function based on training data utilization, algorithm running time, and classification accuracy. Our goal is to minimize the overall score, achieving a classification method that uses minimal data, runs efficiently, and accurately classifies items in the testing set. Throughout this report, we will provide a clear overview of our methodology, model evaluations, and the trade-offs encountered in pursuit of optimal results. We believe this project will revolutionize apparel classification and we are excited to collaborate with all of you on this journey.
+
+
+### Model 1 - Multinomial
+
+```{r code_model1_development, eval = TRUE}
+models[["multinom"]] <- function(dat.train,dat.test){
+  return(predict(multinom(model.formula , dat.train, trace = F),dat.test))
+}
+```
+
+```{r load_model1, eval=FALSE}
+multinom_model <- models[["multinom"]](train,test)
+multinom_model
+```
+The multinom function from the nnet package in R is used to perform Multinomial Logistic Regression. It is an extension of binary logistic regression to handle multi-class classification problems, where there are more than two possible outcome classes. Multinomial Logistic Regression models the relationship between multiple nominal (categorical) dependent variables and one or more independent variables. By using this function, we can effectively predict the apparel categories in the testing set based on the model trained on the training set. Some of its advantages are its efficient implementation for multinomial logistic regression, ability to handle multiple classes effectively and it is easy to interpret and straightforward to use. However, it may not be as versatile or powerful as more complex machine learning algorithms like deep learning for highly complex datasets. Parameters for this model are mainly based to configure the output as opposed to hyperparameterizing the model.
+
+### Model 2 - KNN
+
+
+```{r code_model2_development, eval = TRUE}
+models[["knn"]] <- function(dat.train, dat.test) {
+  knn.train <- dat.train[,.SD,.SDcols = !c("label")]
+  knn.test <- dat.test[,.SD,.SDcols = !c("label")]
+  knn.cl <- dat.train[, label]
+  return(knn(train = knn.train, test=knn.test, cl = knn.cl, k=7))
+}
+```
+
+```{r load_model2, eval=FALSE}
+knn_model <- models[["knn"]](train,test)
+knn_model
+```
+
+K-Nearest Neighbors (KNN) is a simple and intuitive classification algorithm. It assigns a class label to a data point based on the majority class of its k-nearest neighbors. We selected KNN for its simplicity and ease of implementation. A few of its advantages are that its easy to understand and implement, and it has no training phase, as it memorizes the data during fitting. The disadvantages of knn are one, it is computationally expensive during prediction, especially for large datasets and it is sensitive to irrelevant features and noise. The higher the k, the more records it will use to classify the test records, therefore the more accurate it should be. I chose 7 because 5,6, and 8 gave a less better overall score
+
+### Model 3 - Classification Tree
+
+```{r fine tuning, eval=FALSE}
+
+models[["cl_tree_2"]] <- function(dat.train, dat.test) {
+  # Fine-tune the model using cross-validation and grid search
+  cp_values <- c(0.001, 0.01, 0.1, 0.2)
+  minsplit_values <- c(2, 5, 10)
+  minbucket_values <- c(1, 3, 5)
+  maxdepth_values <- c(5, 10, 15)
+
+  best_accuracy <- 0
+  best_params <- NULL
+
+  for (cp in cp_values) {
+    for (minsplit in minsplit_values) {
+      for (minbucket in minbucket_values) {
+        for (maxdepth in maxdepth_values) {
+          # Create the rpart model with current hyperparameters
+          model <- rpart(model.formula, data = dat.train, control = rpart.control(cp = cp, minsplit = minsplit,
+                                                                                 minbucket = minbucket,
+                                                                                 maxdepth = maxdepth))
+
+          # Make predictions on the test set (no need for a separate validation set)
+          y_pred <- predict(model, newdata = dat.test)
+
+          # Calculate accuracy on the test set
+          accuracy <- mean(y_pred == dat.test[, 2:50]) #are these the variables we want to test out?
+
+          # Check if this combination of hyperparameters gives a better accuracy
+          if (accuracy > best_accuracy) {
+            best_accuracy <- accuracy
+            best_params <- list(cp = cp, minsplit = minsplit, minbucket = minbucket, maxdepth = maxdepth)
+            final_model <- model
+          }
+        }
+      }
+    }
+  }
+
+  # Make predictions on the test set using the final model
+  y_pred <- predict(final_model, newdata = dat.test)
+
+  return(y_pred)
+}
+
+```
+
+```{r code_model3_development, eval = TRUE}
+models[["cl_tree"]] <- function(dat.train,dat.test){
+  y.pred <-predict(rpart(model.formula , dat.train),dat.test) 
+  return(probability.to.response(y.pred))
+}
+```
+
+```{r load_model3, eval=FALSE}
+cltree_model <- models[["cl_tree"]](train,test)
+cltree_model
+```
+Classification Trees are non-linear, non-parametric models used for both binary and multi-class classification tasks. The rpart function uses the Recursive Partitioning and Regression Trees (RPART) algorithm to construct the tree by recursively partitioning the data into subsets based on feature values. Once the tree is built, the rpart function uses it to make predictions on new data. For each observation, it follows the decision rules down the tree until it reaches a terminal node. The majority class in that terminal node is predicted as the final output. They are easy to interpret and visualize, providing a clear decision-making process, handles both numerical and categorical data without the need for data preprocessing like one-hot encoding, effective in capturing non-linear relationships between features and the class label, and robust to outliers and can handle missing values. But they are prone to overfitting, especially if the tree is grown to its full depth, lack of robustness in handling noisy data or datasets with small sample sizes and is limited to capture complex interactions between features. Fine tuning didn't give the best overall score, event though it gave a better accuracy, the time it took to run was way longer than the default. 
+
+### Model 4 - Random Forest
+
+
+```{r code_model4_development, eval = TRUE}
+models[["rf"]] <- function(dat.train, dat.test) {
+  rf_model <- randomForest(model.formula, data = dat.train, ntree = 100, mtry = sqrt(ncol(dat.train) - 1), importance = TRUE)
+  pred <- predict(rf_model, newdata = dat.test)
+  return(pred)
+}
+```
+
+```{r load_model4, eval=FALSE}
+rf_model <- models[["rf"]](train.samples[[1]], test)
+rf_model
+```
+Random Forest is an ensemble learning method that combines multiple decision trees to make predictions. It randomly selects subsets of features and data samples during training to create diverse trees. The final prediction is made by averaging or voting on the individual tree predictions. We chose Random Forest for its ability to handle high-dimensional data and reduce overfitting. Its advantages are that it performs well with large datasets and high-dimensional features, it reduces risk of overfitting due to ensemble averaging, and it handles missing values and maintains predictive power. On the other hand, it is computationally more expensive than individual decision trees and may require tuning of hyperparameters to optimize performance. 
+
+
+### Model 5 - Elasticnet
+
+
+```{r code_model5_development, eval = TRUE}
+models[["elasticnet"]] <- function(data, test_data) {
+  train_x <- as.matrix(data[, -1])  
+  train_y <- data$label
+  test_x <- as.matrix(test_data[, -1])
+  test_y <- test_data$label
+  elasticnet_model <- glmnet(train_x, train_y, alpha = 0.5, family = "multinomial")
+  predictions <- probability.to.response(predict(elasticnet_model, newx = test_x, type = "response"))
+  return(predictions)
+}
+```
+
+```{r load_model5, eval=FALSE}
+elasticnet_model <- models[["elasticnet"]](train.samples[[1]], test)
+elasticnet_model
+```
+The Elastic Net model is well recognized for its capacity to choose variables (similar to Lasso) and battle multicollinearity (similar to Ridge). It is built using the glmnet function, used to the training data with the family parameter set to "multinomial" and the alpha parameter set to 0.5, indicating equal weight for the L1 and L2 penalties. The predictions provided by the model on the test data are then put via the probability.to.response function, which transforms them into the original response format.
+
+### Model 6 - SVM
+
+
+```{r code_model6_development, eval = TRUE}
+models[["svm"]] <- function(dat.train, dat.test) {
+  svm_model <- svm(model.formula, data = dat.train, kernel = "radial", cost = 10, gamma = 0.1)
+  pred <- predict(svm_model, newdata = dat.test)
+  return(pred)
+}
+```
+
+```{r load_model6, eval=FALSE}
+svm_model <- models[["svm"]](train.samples[[1]], test)
+svm_model
+```
+The SVM model is built using R's SVM function. The model is renowned for its efficiency in high-dimensional spaces and adaptability when selecting various Kernel functions. The cost parameter is set to 10, which is the cost of violating constraints, and the kernel parameter is set to "radial" for a Radial basis function (RBF) kernel. The gamma parameter, which determines how much influence a single training example has, is set to 0.1.
+
+### Model 7 - GBM
+
+```{r, eval = FALSE}
+# Tune Model
+trControl = trainControl(method="cv",number=5)
+tuneGrid = expand.grid(n.trees = 100,
+                       interaction.depth = c(1,2,3),
+                       shrinkage = (1:100)*0.001,
+                      n.minobsinnode=c(5,10,15))
+garbage = capture.output(cvModel <- train(model.formula,
+                                          data=train.samples[[1]],
+                                          method="gbm",
+                                          trControl=trControl,
+                                          tuneGrid=tuneGrid))
+# Get parameters of best model
+cvModel$bestTune$n.trees
+cvModel$bestTune$interaction.depth
+cvModel$bestTune$shrinkage
+cvModel$bestTune$n.minobsinnode
+```
+
+```{r code_model7_development, eval = TRUE}
+models[["gbm"]] <- function(dat.train, dat.test) {
+  set.seed(1031)
+  cvBoost = gbm::gbm(model.formula,
+              data = dat.train,
+              distribution = "multinomial",
+              n.trees = 500,
+              interaction.depth = 3,
+              n.minobsinnode = 5)
+  pred = predict(cvBoost, dat.test, n.trees = 500, type = 'response')
+  predicted_classes <- apply(pred, 1, function(row) {
+  factor_levels <- levels(as.factor(dat.train$label)) 
+  factor_levels[which.max(row)]})
+  return(factor(predicted_classes))
+}
+
+```
+
+
+```{r load_model7, eval=FALSE}
+gbm_model <- models[["gbm"]](train.samples[[1]], test)
+gbm_model
+```
+The Gradient Boosting Machine (GBM) is an ensemble learning technique used for classification and regression tasks. It combines decision trees sequentially to correct errors and build a strong predictive model. Some of the advantages of the model include high accuracy, ability to handle non-linear relationships, and the provision of feature importance scores. However, it can be computationally expensive, prone to overfitting, and less interpretable compared to individual trees. We used a cross-validating tuning process to find the optimal hyperparameters using to enhance performance and avoid overfitting. However, due to the significant increase in computational time, we performed the tuning process on the entire training dataset separately and then utilized the optimal parameters in the model function. Despite its challenges, GBM is a powerful ensemble learning technique that offers high accuracy and flexibility for complex modeling tasks.
+
+### Model 8 - XGboost
+
+```{r code_model8_development, eval = TRUE}
+
+models[["xgboost"]] <- function(dat.train, dat.test) {
+  train_features <- as.matrix(dat.train[, 2:50])
+  train_labels <- dat.train[[1]]
+  xgboost_model = xgboost(data=as.matrix(train_features), 
+                  label = train_labels,
+                  nrounds = 500,
+                  verbose = 0,
+                  early_stopping_rounds = 20)
+  test_features <- as.matrix(dat.test[, 2:50])
+  test_labels <- dat.test[[1]]
+  pred <- round(predict(xgboost_model, as.matrix(test_features)))
+  pred_w_lables <- factor(pred, levels = 1:10, labels = levels(train_labels))
+  return(pred_w_lables)
+}
+
+```
+
+
+```{r load_model8, eval=FALSE}
+xgboost_model <- models[["xgboost"]](train.samples[[1]], test)
+xgboost_model
+```
+The XGBoost model is a extension of a traditional GBM model, incorporating additional features and optimizations to improve model performance and efficiency. XGBoost uses a more sophisticated regularization approach called "regularized objective," which combines both L1 (Lasso) and L2 (Ridge) regularization to control model complexity. Additionally, it has a built-in mechanism for early stopping, which helps prevent overfitting and reduces training time. XGBoost excels in handling complex datasets, providing high accuracy, and offering efficient parallel processing capabilities. However, it may require careful parameter tuning to optimize performance and could be computationally intensive, especially for larger datasets or complex hyperparameter grids. By default, XGBoost predicts numeric values, which posed a challenge when dealing with non-numeric factors like the picture labels. To address this, the predictions were rounded to the closest integer and then converted back to non-numeric factors using the 'factor' function. 
+
+### Model 9 - h20
+
+```{r Hyper Parameter Optimization, eval = FALSE}
+# Hyper Parameter Optimization
+h2o.init()
+split = sample(x = c('train','validation'),size = nrow(train), replace = T,prob = c(0.6,0.4))
+train_nn = train[split=='train',]
+validation_nn = train[split=='validation',]
+test_nn = test
+
+train_h2o = as.h2o(train_nn)
+validation_h2o = as.h2o(validation_nn)
+test_h2o = as.h2o(test_nn)
+
+hyper_parameters = list(activation=c('Rectifier','Tanh','Maxout','RectifierWithDropout'
+                                     ,'TanhWithDropout','MaxoutWithDropout'),
+                        hidden=list(c(20,20),c(50,50),c(100,100,100),
+                                    c(30,30,30),c(50,50,50,50),c(25,25,25,25)),
+                        l1=seq(0,1e-4,1e-6),
+                        l2=seq(0,1e-4,1e-6))
+
+search_criteria = list(strategy='RandomDiscrete',
+                       max_runtime_secs=360,
+                       max_models=100,
+                       seed=1031,
+                       stopping_rounds=5,
+                       stopping_tolerance=1e-2)
+# Tune
+grid = h2o.grid(algorithm='deeplearning',
+                grid_id='dl_grid_random',
+                training_frame = train_h2o,
+                validation_frame = validation_h2o,
+                x=2:50,
+                y=1,
+                epochs=10,
+                stopping_metric='logloss',
+                stopping_tolerance=1e-2,
+                stopping_rounds=2,
+                hyper_params = hyper_parameters,
+                search_criteria = search_criteria)
+
+best_model <- h2o.getModel(grid@model_ids[[1]]) ## model with lowest logloss
+best_params <- best_model@allparameters
+best_params
+```
+
+```{r code_model9_development, eval = TRUE}
+models[["nn_h20"]] <- function(dat.train, dat.test) {
+  h2o.init()
+  train_h2o = as.h2o(dat.train)
+  test_h2o = as.h2o(dat.test)
+  nn_model = h2o.deeplearning(x=2:50,
+                         y=1,
+                         training_frame = train_h2o,
+                         nfolds = 0,
+                         keep_cross_validation_models = TRUE,
+                         ignore_const_cols = TRUE,
+                         activation = 'RectifierWithDropout',
+                         l1 = 4.9e-05,
+                         l2 = 9e-05,
+                         distribution = "multinomial",
+                         stopping_rounds = 2,
+                         stopping_metric = "logloss",
+                         stopping_tolerance = 0.01,
+                         max_runtime_secs = 359.987,
+                         balance_classes = TRUE,
+                         hidden=c(50,50),
+                         hidden_dropout_ratios = c(0.05,0.05),
+                         epochs = 10,
+                         seed=1031,
+                         verbose = FALSE)
+  pred = h2o.predict(nn_model, newdata = test_h2o, predict = "class")
+  return(as.factor(as.vector(pred[[1]])))
+}
+
+```
+
+```{r load_model9, eval=FALSE }
+nn_model <- models[["nn_h20"]](train.samples[[1]], test)
+?h2o.deeplearning
+```
+The H2O model is an advanced machine learning platform known for its ability to handle big data seamlessly. It offers a distributed and high-performance environment, making it ideal for large-scale projects. H2O supports various algorithms, such as regression, classification, and clustering, and utilizes parallel processing techniques for faster training and predictions. One of the significant advantages of H2O is its ability to handle big data seamlessly. Additionally, H2O provides a user-friendly interface, making it accessible to both beginners and experts in data science. However, due to its distributed nature, setting up H2O on a cluster requires additional infrastructure work, including transforming both the train and test set into an appropriate format. Similar to the GBM model, we conducted a separate tuning process on the complete training dataset to identify the optimal parameters for the model function and reduce computational time for each individual model. We tuned the model using a grid search technique to optimize its performance.
+
+### Model 10 - Ridge Regression
+
+
+```{r code_model10_development, eval = TRUE}
+models[["ridge_regression"]] <- function(dat.train, dat.test, alpha = 0, lambda = NULL) {
+  y_train <- dat.train[,label]
+  x_train <- as.matrix(dat.train[, -1])
+  ridge_model <- glmnet(x_train, y_train, alpha = alpha, lambda = lambda, family = "multinomial")
+  x_test <- as.matrix(dat.test[,-1])
+  y_pred <- predict(ridge_model, newx = x_test, s = lambda)
+  return(probability.to.response(y_pred))
+}
+
+```
+
+```{r load_model10, eval=FALSE}
+ridge_predictions <- models[["ridge_regression"]](train.samples[[1]], test, alpha = 0, lambda = NULL)
+```
+The Ridge Regression model is a form of linear regression application that specializes in the handling of multicollinearity and overfitting that appears within a multiple linear regression model. This model tuning method lverages L2 regularization to combat multicollinearity. Model 10 deplots a Ridge Regression model using the glmnet function — setting the alpha term to 0 and the family to “multinomial.” As it is the alpha parameter that dictates the method of regularization implemented, marking it at zero makes use of soley L2, and not L1, a LAsso form of regularization.
+
+### Model 11 - Lasso regression
+
+
+```{r code_model11_development, eval = TRUE}
+models[["lasso_regression"]] <- function(dat.train, dat.test, alpha = 1, lambda = NULL) {
+  y_train <- dat.train[,label]
+  x_train <- as.matrix(dat.train[, -1])
+
+  lasso_model <- glmnet(x_train, y_train, alpha = alpha, lambda = lambda, family = "multinomial")
+
+  x_test <- as.matrix(dat.test[,-1])
+  y_pred <- predict(lasso_model, newx = x_test, s = lambda)
+
+  return(probability.to.response(y_pred))
+}
+
+```
+
+```{r load_model11, eval=FALSE}
+lasso_predictions <- models[["lasso_regression"]](train.samples[[1]], test, alpha = 0, lambda = NULL)
+```
+The Lasso Regression model, which stands for “Least Absolute Shrinkage and Selection Operator,” is another form of regression that implements L1 regularization. The attributes of this model type aid in the discarding of irrelevant and redundant variables — a useful tool when building predictive models. Model 11 builds a lasso regression using the glmnet package as well , with simialr parameter settings to the Ridge Regression model foun din model 11; however, the alpha designation is set to equal 1. It is important to note that this distinction alters the model from using L2 regularization to L1, therefore adjusting the penalty terms and making the model suited to the strengths that come with Lasso.
+
+## Preliminary Result
+
+```{r scoreboard - preliminary, results='hide'}
+scoreboard <- data.table(Model = character(), `Sample Size` = numeric(), Data= character(), A = numeric(), B = numeric(), C = numeric())
+selected.models <- c("nn_h20") #if you want to test just on certain models, comment out next line
+selected.models <- names(models)
+for (m.name in selected.models) {
+  for (s.name in names(train.samples)) {
+    #print(paste(m.name, s.name)) #to show where we are
+    train.dat <- train.samples[[s.name]]
+    n.train.samples <- nrow(train.dat)
+    train.time <- system.time ({
+      y.pred <- models[[m.name]](train.dat,test)
+    })
+    model.table <- data.table(Model=m.name, 
+                              `Sample Size` = n.train.samples,
+                              Data = s.name,
+                              A = n.train.samples/n.train,
+                              B = min(1,train.time[["elapsed"]]/60),
+                              C = mean(y.pred!=test[,label], na.rm = T))
+    scoreboard <- rbind(scoreboard, model.table)
+  }
+}
+```
+``` {r preliminary show}
+scoreboard[,Score:=0.15*A + 0.1*B + 0.75*C][order(Score)][,lapply(.SD, round.numerics, digits = 3)]
+```
+
+## Scoreboard
+
+```{r scoreboard - final}
+scoreboard1 <- scoreboard[,Score:=0.15*A + 0.1*B + 0.75*C][,.(A=mean(A), B = mean(B), C = mean(C), Score = mean(Score)), by = .(Model,`Sample Size`)][order(Score)][,lapply(.SD, round.numerics, digits = 3)]
+datatable(scoreboard1)
+
+```
+
+
+
+## Discussion
+Based on all the models we have tried, rf and svm are amongst the top that gave us a better overall score. It also shows that rf works better with higher sample size. This might be due to the inherent ability of Random Forests to handle larger and more complex datasets effectively, exploiting more information to achieve better generalization.
+
+On the other hand, xgboost gave us the worst score taking in consideration time, proportion of training rows, and the number of predictions that are incorrectly classified. Although XGBoost models are frequently praised for their improved accuracy performance, these models are computationally intensive and necessitate larger datasets. As a result, they might not be the best option when resource utilization or computational efficiency are key considerations.
+
+An interesting thing that we observed was that Cl tree works better with smaller sample size in terms of overall score for our given sample sizes. If we used a sample size of 500 for example, it will give us a worse score than our current sample sizes of 900, 2100, 2400.
+
+From the findings, it can be concluded that the optimal model selection depends heavily on the specific requirements and constraints of the application. If accuracy is the main priority, then models like Random Forests and Support Vector Machines should be prioritized. However, if time and computational efficiency are key, simpler models like CL Trees could be more suitable. Moreover, the importance of the volume and quality of the training data has been highlighted, with models such as Random Forest demonstrating higher performance with larger datasets.
+
+Future research may take into account more elements when determining the final score. For instance, in some situations, model interpretability or noise robustness may be crucial. An understanding of the models' performances that is more thorough and nuanced might result from the inclusion of these factors.
+
+## Model Development Responsibilities
+
+For the 10 models, please list the names of the developers along with percentages for how the responsibilities were divided.
+
+1. Asta 
+2. Asta
+3. Asta
+4. Shiyue
+5. Shiyue
+6. Shiyue
+7. Joy
+8. Joy
+9. Joy
+10. Shayne
+11. Shayne
+
+## References
+
+
